@@ -1,0 +1,102 @@
+# Hardware-specific reference scripts exported from the active Marvin v3 path.
+# These are examples, not safe defaults for arbitrary EVSEs or thermostats.
+
+energy_director_apply_ev:
+  alias: Energy Director - Apply EV Target
+  description: >-
+    Apply the recommended EVSE current. Reductions happen immediately;
+    increases ramp by one amp per controller cycle. Start commands have a
+    cooldown while stop commands remain immediate.
+  icon: mdi:ev-station
+  mode: single
+  max_exceeded: silent
+  sequence:
+    - variables:
+        target_a: "{{ states('sensor.energy_director_recommended_ev_amps') | int(0) }}"
+        min_a: "{{ states('input_number.energy_director_ev_min_amps') | int(6) }}"
+        current_a: "{{ states('number.growatt_thor_ev_charger_max_current') | int(6) }}"
+        status: "{{ states('sensor.growatt_thor_ev_charger_status') | lower }}"
+        active_session: "{{ status in ['charging', 'suspendedev', 'suspendedevse'] }}"
+        startable: "{{ status == 'preparing' }}"
+        last_command_age: >-
+          {% set raw = states('input_datetime.energy_director_last_ev_start_stop') %}
+          {% if raw in ['unknown', 'unavailable', 'none', ''] %}
+            9999
+          {% else %}
+            {{ as_timestamp(now()) - as_timestamp(raw) }}
+          {% endif %}
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ target_a < min_a and active_session }}"
+          sequence:
+            - action: button.press
+              continue_on_error: true
+              target: {entity_id: button.growatt_thor_ev_charger_stop_charging}
+            - action: input_datetime.set_datetime
+              target: {entity_id: input_datetime.energy_director_last_ev_start_stop}
+              data:
+                datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+        - conditions:
+            - condition: template
+              value_template: >-
+                {{ target_a >= min_a and
+                   is_number(states('number.growatt_thor_ev_charger_max_current')) }}
+          sequence:
+            - variables:
+                stepped_a: >-
+                  {% if target_a < current_a %}
+                    {{ target_a }}
+                  {% elif target_a > current_a %}
+                    {{ [current_a + 1, target_a] | min }}
+                  {% else %}
+                    {{ current_a }}
+                  {% endif %}
+            - if:
+                - condition: template
+                  value_template: "{{ stepped_a | int != current_a | int }}"
+              then:
+                - action: number.set_value
+                  continue_on_error: true
+                  target: {entity_id: number.growatt_thor_ev_charger_max_current}
+                  data: {value: "{{ stepped_a | int }}"}
+            - if:
+                - condition: template
+                  value_template: "{{ startable and last_command_age | float(0) >= 90 }}"
+              then:
+                - action: button.press
+                  continue_on_error: true
+                  target: {entity_id: button.growatt_thor_ev_charger_start_charging}
+                - action: input_datetime.set_datetime
+                  target: {entity_id: input_datetime.energy_director_last_ev_start_stop}
+                  data:
+                    datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+
+marvin_v3_apply_hvac:
+  alias: Marvin v3 - Apply HVAC Target
+  description: >-
+    Apply Marvin v3's staged forecast-aware vacation cooling target. Do nothing
+    outside vacation mode or when Marvin HVAC control is disabled.
+  icon: mdi:thermostat-auto
+  mode: single
+  max_exceeded: silent
+  sequence:
+    - variables:
+        target_temp: "{{ states('sensor.marvin_v3_hvac_target') | float(81) }}"
+        current_target: "{{ state_attr('climate.t10_plus_thermostat', 'temperature') | float(0) }}"
+    - if:
+        - condition: state
+          entity_id: input_boolean.vacation_mode
+          state: "on"
+        - condition: state
+          entity_id: input_boolean.energy_director_hvac_enabled
+          state: "on"
+        - condition: template
+          value_template: >-
+            {{ states('climate.t10_plus_thermostat') not in ['unknown','unavailable']
+               and (target_temp - current_target) | abs >= 0.5 }}
+      then:
+        - action: climate.set_temperature
+          continue_on_error: true
+          target: {entity_id: climate.t10_plus_thermostat}
+          data: {temperature: "{{ target_temp }}"}

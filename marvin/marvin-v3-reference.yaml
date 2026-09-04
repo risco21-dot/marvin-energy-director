@@ -1,0 +1,200 @@
+# Marvin v3 reference model
+#
+# This is intentionally NOT a drop-in Home Assistant package. It preserves the
+# tested equations and control patterns while keeping hardware/tariff adapters
+# explicit. Map the entity IDs and create equivalent HA helpers before enabling
+# any actuation. Public reference behavior keeps Live Control OFF by default.
+
+marvin_reference:
+  modes:
+    active: [Normal, Conservation, Abundant, Storm, Outage, Fault]
+    manual: [Auto, Conservation, Normal, Abundant, Storm, Outage]
+
+  site_parameters:
+    battery_capacity_kwh: 16
+    reserve_soc_percent: 10
+    charge_efficiency: 0.95
+    discharge_efficiency: 0.94
+    solar_margin_minutes: 30
+    abundant_minimum_live_solar_w: 1500
+    vacation_base_temp_f: 81
+    ev_min_amps: 6
+
+  required_adapters:
+    battery_soc: sensor.growatt_battery_battery_soc
+    battery_power: sensor.growatt_battery_battery_power
+    corrected_solar_remaining_kwh: sensor.energy_director_corrected_solar_remaining
+    non_ev_load_w: sensor.energy_director_non_ev_load
+    night_load_estimate_kw: sensor.energy_director_night_load_estimate
+    night_need_kwh: sensor.energy_director_night_need
+    live_pv_w: sensor.growatt_solar_solar_total_power
+    core_data_healthy: binary_sensor.energy_director_core_data_healthy
+    grid_available: binary_sensor.energy_director_grid_available
+    storm_risk: binary_sensor.energy_director_storm_risk
+    recommended_ev_amps: sensor.energy_director_recommended_ev_amps
+
+  helpers:
+    planning_baseline_load_w: |-
+      {% set raw = states('sensor.energy_director_non_ev_load') | float(0) %}
+      {% set floor = states('sensor.energy_director_night_load_estimate') | float(0.6) * 1000 %}
+      {% set extra = 3500 if is_state('binary_sensor.marvin_extra_cooling_active','on') else 0 %}
+      {% set corrected = [raw - extra, 0] | max %}
+      {{ ([corrected, floor] | max) | round(0) }}
+
+    # The live install feeds the baseline helper through a 60-minute
+    # time_simple_moving_average filter before using it here.
+    planning_daylight_need_kwh: |-
+      {% set load_kw = states('sensor.marvin_planning_non_ev_load') | float(0) / 1000 %}
+      {% if is_state('sun.sun', 'above_horizon') %}
+        {% set set_ts = as_timestamp(state_attr('sun.sun', 'next_setting')) %}
+        {% set solar_margin_h = states('input_number.energy_director_solar_margin_minutes') | float(30) / 60 %}
+        {% set hours_left = [0, ((set_ts - as_timestamp(now())) / 3600) - solar_margin_h] | max %}
+        {{ (load_kw * hours_left) | round(2) }}
+      {% else %}
+        0
+      {% endif %}
+
+    planning_energy_margin_kwh: |-
+      {% set cap = states('input_number.energy_director_battery_capacity_kwh') | float(16) %}
+      {% set reserve = states('input_number.energy_director_reserve_soc') | float(10) %}
+      {% set ce = states('input_number.energy_director_charge_efficiency') | float(0.95) %}
+      {% set de = states('input_number.energy_director_discharge_efficiency') | float(0.94) %}
+      {% set soc = states('sensor.growatt_battery_battery_soc') | float(0) %}
+      {% set solar = states('sensor.energy_director_corrected_solar_remaining') | float(0) %}
+      {% set day = states('sensor.marvin_planning_daylight_need') | float(0) %}
+      {% set night = states('sensor.energy_director_night_need') | float(0) %}
+      {% set stored = cap * soc / 100 %}
+      {% set floor = cap * reserve / 100 %}
+      {% set net = solar - day %}
+      {% set delta = net * ce if net >= 0 else net / de %}
+      {% set sunset = [ [stored + delta, floor] | max, cap ] | min %}
+      {{ (sunset - floor - night) | round(2) }}
+
+    planning_grid_need_kwh: |-
+      {% set margin = states('sensor.marvin_planning_energy_margin') | float(0) %}
+      {{ [0, -margin] | max | round(2) }}
+
+    planning_morning_soc_percent: |-
+      {% set cap = states('input_number.energy_director_battery_capacity_kwh') | float(16) %}
+      {% set reserve = states('input_number.energy_director_reserve_soc') | float(10) %}
+      {% set ce = states('input_number.energy_director_charge_efficiency') | float(0.95) %}
+      {% set de = states('input_number.energy_director_discharge_efficiency') | float(0.94) %}
+      {% set soc = states('sensor.growatt_battery_battery_soc') | float(0) %}
+      {% set solar = states('sensor.energy_director_corrected_solar_remaining') | float(0) %}
+      {% set day = states('sensor.marvin_planning_daylight_need') | float(0) %}
+      {% set night = states('sensor.energy_director_night_need') | float(0) %}
+      {% set stored = cap * soc / 100 %}
+      {% set floor = cap * reserve / 100 %}
+      {% set net = solar - day %}
+      {% set delta = net * ce if net >= 0 else net / de %}
+      {% set sunset = [ [stored + delta, floor] | max, cap ] | min %}
+      {% set projected = (sunset - night) / cap * 100 %}
+      {{ [ [projected, reserve] | max, 100 ] | min | round(0) }}
+
+    abundance_factor_percent: |-
+      {% set soc = states('sensor.growatt_battery_battery_soc') | float(0) %}
+      {% set cap = states('input_number.energy_director_battery_capacity_kwh') | float(16) %}
+      {% set ce = states('input_number.energy_director_charge_efficiency') | float(0.95) %}
+      {% set solar_left = states('sensor.energy_director_corrected_solar_remaining') | float(0) %}
+      {% set day_need = states('sensor.marvin_planning_daylight_need') | float(0) %}
+      {% set pv = states('sensor.growatt_solar_solar_total_power') | float(0) %}
+      {% set min_pv = states('input_number.energy_director_abundant_minimum_live_solar') | float(1500) %}
+      {% set ceiling = 96 %}
+      {% set headroom_to_ceiling = (cap * [ceiling - soc, 0] | max / 100) / ce %}
+      {% set raw_surplus = solar_left - day_need %}
+      {% set surplus = raw_surplus - headroom_to_ceiling %}
+      {% if is_state('sun.sun','above_horizon') and state_attr('sun.sun','next_setting') %}
+        {% set hours_left = [0, (as_timestamp(state_attr('sun.sun','next_setting')) - as_timestamp(now())) / 3600] | max %}
+      {% else %}
+        {% set hours_left = 0 %}
+      {% endif %}
+      {% set soc_score = [[(soc - 82) / 14 * 40, 0] | max, 40] | min %}
+      {% set surplus_score = [[(surplus - 0.25) / 3.5 * 45, 0] | max, 45] | min %}
+      {% set daylight_score = [[hours_left / 6 * 15, 0] | max, 15] | min %}
+      {% set base = soc_score + surplus_score + daylight_score %}
+      {% set preclip_floor = 74 if soc >= 96 and raw_surplus >= 0.5 and pv >= min_pv and hours_left >= 1 else 0 %}
+      {{ ([base, preclip_floor] | max) | round(0) }}
+
+    abundance_opportunity_contract:
+      source: sensor.energy_director_abundance_factor
+      type: threshold_helper
+      upper: 64
+      hysteresis: 6
+
+    desired_mode: |-
+      {% set manual = states('input_select.energy_director_manual_mode') %}
+      {% set grid_need = states('sensor.marvin_planning_grid_need') | float(0) %}
+      {% set morning = states('sensor.marvin_planning_morning_soc') | float(0) %}
+      {% if not is_state('binary_sensor.energy_director_core_data_healthy','on') %}
+      Fault
+      {% elif not is_state('binary_sensor.energy_director_grid_available','on') %}
+      Outage
+      {% elif is_state('binary_sensor.energy_director_storm_risk','on') %}
+      Storm
+      {% elif manual != 'Auto' %}
+      {{ manual }}
+      {% elif is_state('binary_sensor.energy_director_abundance_opportunity','on') %}
+      Abundant
+      {% elif morning < 20 or (is_state('input_boolean.marvin_grid_need_sustained','on') and grid_need >= 0.2) %}
+      Conservation
+      {% else %}
+      Normal
+      {% endif %}
+
+    hvac_target_f: |-
+      {% set base = states('input_number.energy_director_vacation_base_temp') | float(81) %}
+      {% set mode = states('input_select.energy_director_active_mode') %}
+      {% set factor = states('sensor.energy_director_abundance_factor') | float(0) %}
+      {% if mode == 'Abundant' %}
+        {% if factor >= 85 %}70
+        {% elif factor >= 76 %}72
+        {% elif factor >= 68 %}75
+        {% else %}78
+        {% endif %}
+      {% else %}
+      {{ base | round(0) | int }}
+      {% endif %}
+
+  sustained_grid_need:
+    set_when: sensor.marvin_planning_grid_need > 0.3 kWh for 10 minutes
+    clear_when: sensor.marvin_planning_grid_need < 0.1 kWh for 10 minutes
+    helper: input_boolean.marvin_grid_need_sustained
+
+  mode_manager:
+    immediate_priority: [Fault, Outage, Storm, manual]
+    auto_abundant:
+      normal_dwell_minutes: 3
+      preclip_fast_path:
+        battery_soc_above: 95.5
+        abundance_opportunity: true
+    auto_conservation_dwell_minutes: 3
+    auto_normal_dwell_minutes: 3
+    active_mode_helper: input_select.energy_director_active_mode
+
+  controller:
+    cadence: every minute plus relevant state changes
+    gate: input_boolean.energy_director_live
+    actions:
+      - script.energy_director_apply_ev
+      - script.marvin_v3_apply_hvac
+
+  ev_apply_script:
+    target: sensor.energy_director_recommended_ev_amps
+    minimum: input_number.energy_director_ev_min_amps
+    hardware_current: number.growatt_thor_ev_charger_max_current
+    hardware_status: sensor.growatt_thor_ev_charger_status
+    start_action: button.growatt_thor_ev_charger_start_charging
+    stop_action: button.growatt_thor_ev_charger_stop_charging
+    behavior:
+      stop_below_minimum: immediate
+      decrease_current: immediate
+      increase_current: 1 amp per controller cycle
+      start_cooldown_seconds: 90
+
+  hvac_apply_script:
+    target: sensor.marvin_v3_hvac_target
+    climate: climate.t10_plus_thermostat
+    gates:
+      - input_boolean.vacation_mode
+      - input_boolean.energy_director_hvac_enabled
+    minimum_target_delta_f: 0.5

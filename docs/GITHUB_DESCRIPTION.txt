@@ -1,0 +1,1 @@
+Animated cyberpunk Home Assistant operating surface with Marvin v3 solar/battery/EV/HVAC energy planning and control reference.

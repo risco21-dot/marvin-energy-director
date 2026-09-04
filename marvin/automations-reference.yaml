@@ -1,0 +1,333 @@
+# Reference automations exported from the live Marvin v3 control path.
+# Adapt entity IDs before importing. Keep Live Control off during adaptation.
+
+- alias: Energy Director - Marvin v3 Mode Manager
+  description: >-
+    Single authoritative Marvin v3 mode manager. Safety and manual modes apply
+    immediately. Automatic Abundant follows forecast-aware abundance with an
+    immediate 96% pre-clipping path; automatic Normal and Conservation require
+    stable planner output.
+  triggers:
+    - trigger: time_pattern
+      minutes: "/1"
+    - trigger: homeassistant
+      event: start
+    - trigger: state
+      entity_id:
+        - sensor.marvin_v3_desired_mode
+        - input_select.energy_director_manual_mode
+        - input_select.energy_director_active_mode
+        - binary_sensor.energy_director_abundance_opportunity
+        - sensor.growatt_battery_battery_soc
+        - binary_sensor.energy_director_core_data_healthy
+        - binary_sensor.energy_director_grid_available
+        - binary_sensor.energy_director_storm_risk
+        - input_boolean.marvin_grid_need_sustained
+  conditions: []
+  actions:
+    - choose:
+        - alias: Safety - Fault
+          conditions:
+            - condition: state
+              entity_id: sensor.marvin_v3_desired_mode
+              state: Fault
+            - condition: not
+              conditions:
+                - condition: state
+                  entity_id: input_select.energy_director_active_mode
+                  state: Fault
+          sequence:
+            - action: input_select.select_option
+              target: {entity_id: input_select.energy_director_active_mode}
+              data: {option: Fault}
+            - action: logbook.log
+              data:
+                name: Marvin v3
+                entity_id: input_select.energy_director_active_mode
+                message: "Fault applied immediately: core planning data unhealthy."
+        - alias: Safety - Outage
+          conditions:
+            - condition: state
+              entity_id: sensor.marvin_v3_desired_mode
+              state: Outage
+            - condition: not
+              conditions:
+                - condition: state
+                  entity_id: input_select.energy_director_active_mode
+                  state: Outage
+          sequence:
+            - action: input_select.select_option
+              target: {entity_id: input_select.energy_director_active_mode}
+              data: {option: Outage}
+            - action: logbook.log
+              data:
+                name: Marvin v3
+                entity_id: input_select.energy_director_active_mode
+                message: "Outage applied immediately: grid unavailable."
+        - alias: Safety - Storm
+          conditions:
+            - condition: state
+              entity_id: sensor.marvin_v3_desired_mode
+              state: Storm
+            - condition: not
+              conditions:
+                - condition: state
+                  entity_id: input_select.energy_director_active_mode
+                  state: Storm
+          sequence:
+            - action: input_select.select_option
+              target: {entity_id: input_select.energy_director_active_mode}
+              data: {option: Storm}
+            - action: logbook.log
+              data:
+                name: Marvin v3
+                entity_id: input_select.energy_director_active_mode
+                message: "Storm reserve applied immediately."
+        - alias: Manual - Conservation
+          conditions:
+            - condition: state
+              entity_id: input_select.energy_director_manual_mode
+              state: Conservation
+            - condition: not
+              conditions:
+                - condition: state
+                  entity_id: input_select.energy_director_active_mode
+                  state: Conservation
+          sequence:
+            - action: input_select.select_option
+              target: {entity_id: input_select.energy_director_active_mode}
+              data: {option: Conservation}
+        - alias: Manual - Normal
+          conditions:
+            - condition: state
+              entity_id: input_select.energy_director_manual_mode
+              state: Normal
+            - condition: not
+              conditions:
+                - condition: state
+                  entity_id: input_select.energy_director_active_mode
+                  state: Normal
+          sequence:
+            - action: input_select.select_option
+              target: {entity_id: input_select.energy_director_active_mode}
+              data: {option: Normal}
+        - alias: Manual - Abundant
+          conditions:
+            - condition: state
+              entity_id: input_select.energy_director_manual_mode
+              state: Abundant
+            - condition: not
+              conditions:
+                - condition: state
+                  entity_id: input_select.energy_director_active_mode
+                  state: Abundant
+          sequence:
+            - action: input_select.select_option
+              target: {entity_id: input_select.energy_director_active_mode}
+              data: {option: Abundant}
+        - alias: Manual - Storm
+          conditions:
+            - condition: state
+              entity_id: input_select.energy_director_manual_mode
+              state: Storm
+            - condition: not
+              conditions:
+                - condition: state
+                  entity_id: input_select.energy_director_active_mode
+                  state: Storm
+          sequence:
+            - action: input_select.select_option
+              target: {entity_id: input_select.energy_director_active_mode}
+              data: {option: Storm}
+        - alias: Manual - Outage
+          conditions:
+            - condition: state
+              entity_id: input_select.energy_director_manual_mode
+              state: Outage
+            - condition: not
+              conditions:
+                - condition: state
+                  entity_id: input_select.energy_director_active_mode
+                  state: Outage
+          sequence:
+            - action: input_select.select_option
+              target: {entity_id: input_select.energy_director_active_mode}
+              data: {option: Outage}
+        - alias: Auto - Abundant
+          conditions:
+            - condition: state
+              entity_id: input_select.energy_director_manual_mode
+              state: Auto
+            - condition: state
+              entity_id: sensor.marvin_v3_desired_mode
+              state: Abundant
+            - condition: or
+              conditions:
+                - condition: and
+                  conditions:
+                    - condition: numeric_state
+                      entity_id: sensor.growatt_battery_battery_soc
+                      above: 95.5
+                    - condition: state
+                      entity_id: binary_sensor.energy_director_abundance_opportunity
+                      state: "on"
+                - condition: state
+                  entity_id: sensor.marvin_v3_desired_mode
+                  state: Abundant
+                  for: {minutes: 3}
+            - condition: not
+              conditions:
+                - condition: state
+                  entity_id: input_select.energy_director_active_mode
+                  state: Abundant
+          sequence:
+            - action: input_select.select_option
+              target: {entity_id: input_select.energy_director_active_mode}
+              data: {option: Abundant}
+            - action: logbook.log
+              data:
+                name: Marvin v3
+                entity_id: input_select.energy_director_active_mode
+                message: >-
+                  Automatic Abundant applied from forecast-aware abundance; 96%+
+                  SOC may bypass the normal 3-minute entry dwell.
+        - alias: Auto - Conservation
+          conditions:
+            - condition: state
+              entity_id: input_select.energy_director_manual_mode
+              state: Auto
+            - condition: state
+              entity_id: sensor.marvin_v3_desired_mode
+              state: Conservation
+              for: {minutes: 3}
+            - condition: not
+              conditions:
+                - condition: state
+                  entity_id: input_select.energy_director_active_mode
+                  state: Conservation
+          sequence:
+            - action: input_select.select_option
+              target: {entity_id: input_select.energy_director_active_mode}
+              data: {option: Conservation}
+            - action: logbook.log
+              data:
+                name: Marvin v3
+                entity_id: input_select.energy_director_active_mode
+                message: "Automatic Conservation applied after a stable projected deficit."
+        - alias: Auto - Normal
+          conditions:
+            - condition: state
+              entity_id: input_select.energy_director_manual_mode
+              state: Auto
+            - condition: state
+              entity_id: sensor.marvin_v3_desired_mode
+              state: Normal
+              for: {minutes: 3}
+            - condition: not
+              conditions:
+                - condition: state
+                  entity_id: input_select.energy_director_active_mode
+                  state: Normal
+          sequence:
+            - action: input_select.select_option
+              target: {entity_id: input_select.energy_director_active_mode}
+              data: {option: Normal}
+            - action: logbook.log
+              data:
+                name: Marvin v3
+                entity_id: input_select.energy_director_active_mode
+                message: >-
+                  Automatic Normal applied: neither real abundance nor a
+                  sustained energy deficit exists.
+  mode: restart
+
+- alias: Marvin - Confirm Sustained Grid Need
+  description: >-
+    Confirm the smoothed planning deficit instead of reacting to instantaneous
+    load. Set after planning grid need stays above 0.3 kWh for 10 minutes and
+    clear after it stays below 0.1 kWh for 10 minutes.
+  triggers:
+    - trigger: numeric_state
+      entity_id: sensor.marvin_planning_grid_need
+      above: 0.3
+      for: "00:10:00"
+      id: need
+    - trigger: numeric_state
+      entity_id: sensor.marvin_planning_grid_need
+      below: 0.1
+      for: "00:10:00"
+      id: clear
+    - trigger: homeassistant
+      event: start
+      id: start
+  conditions: []
+  actions:
+    - choose:
+        - conditions: [{condition: trigger, id: need}]
+          sequence:
+            - action: input_boolean.turn_on
+              target: {entity_id: input_boolean.marvin_grid_need_sustained}
+        - conditions: [{condition: trigger, id: [clear, start]}]
+          sequence:
+            - action: input_boolean.turn_off
+              target: {entity_id: input_boolean.marvin_grid_need_sustained}
+  mode: restart
+
+- alias: Marvin v3 Controller
+  description: >-
+    Execute Marvin v3 decisions. Planning lives in helpers and the mode manager;
+    this automation delegates hardware actuation only when Live Control is on.
+  triggers:
+    - trigger: time_pattern
+      minutes: "/1"
+    - trigger: homeassistant
+      event: start
+    - trigger: state
+      entity_id:
+        - input_boolean.energy_director_live
+        - input_boolean.vacation_mode
+        - input_boolean.energy_director_hvac_enabled
+        - input_select.energy_director_active_mode
+        - sensor.marvin_v3_hvac_target
+        - sensor.marvin_v3_desired_mode
+        - sensor.energy_director_recommended_ev_amps
+        - sensor.growatt_thor_ev_charger_status
+        - binary_sensor.duke_ev_peak
+  conditions: []
+  actions:
+    - choose:
+        - conditions:
+            - condition: state
+              entity_id: input_boolean.energy_director_live
+              state: "on"
+          sequence:
+            - action: script.energy_director_apply_ev
+            - action: script.marvin_v3_apply_hvac
+  mode: single
+
+- alias: Weather Next Two Hours
+  description: Caches two compact hourly forecast rows for the Marvin Home dashboard.
+  triggers:
+    - trigger: time_pattern
+      minutes: "/30"
+    - trigger: homeassistant
+      event: start
+  conditions: []
+  actions:
+    - action: weather.get_forecasts
+      target: {entity_id: weather.forecast_home}
+      data: {type: hourly}
+      response_variable: hourly
+    - action: input_text.set_value
+      target: {entity_id: input_text.weather_next_two_hours}
+      data:
+        value: >-
+          {% set f = hourly['weather.forecast_home']['forecast'] | default([], true) %}
+          {% if f | count >= 2 %}
+          {{ [
+            {'d': f[0].datetime, 'c': f[0].condition, 't': f[0].temperature, 'p': f[0].precipitation_probability | default(none), 'r': f[0].precipitation | default(none)},
+            {'d': f[1].datetime, 'c': f[1].condition, 't': f[1].temperature, 'p': f[1].precipitation_probability | default(none), 'r': f[1].precipitation | default(none)}
+          ] | to_json }}
+          {% else %}[]{% endif %}
+  mode: single
+  max_exceeded: silent

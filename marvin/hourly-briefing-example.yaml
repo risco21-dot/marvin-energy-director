@@ -1,0 +1,68 @@
+# Compact public example of Marvin's hourly commentary layer.
+# The private reference installation uses a larger original phrase bank.
+# No copied dialogue is included.
+
+alias: Marvin - Hourly Night City Briefing (public example)
+description: >-
+  Capture one stable, qualitative energy briefing each hour. Keep the output in
+  input_text.marvin_hourly_briefing so the renderer reads one stable line rather
+  than regenerating prose on every state update.
+trigger:
+  - platform: time_pattern
+    minutes: "0"
+  - platform: homeassistant
+    event: start
+action:
+  - service: input_text.set_value
+    target:
+      entity_id: input_text.marvin_hourly_briefing
+    data:
+      value: >-
+        {% set margin = states('sensor.marvin_planning_energy_margin') | float(0) %}
+        {% set morning = states('sensor.marvin_planning_morning_soc') | float(0) %}
+        {% set soc = states('sensor.growatt_battery_battery_soc') | float(0) %}
+        {% set bp = states('sensor.growatt_battery_battery_power') | float(0) %}
+        {% set hvac = state_attr('climate.t10_plus_thermostat','hvac_action') | default('unknown', true) %}
+        {% set ev = states('sensor.growatt_thor_ev_charger_status') | lower %}
+        {% set bank = is_state('binary_sensor.marvin_extra_cooling_active','on') %}
+        {% set seed = now().timetuple().tm_yday * 24 + now().hour %}
+        {% set good = [
+          'Everything is behaving. I have filed a complaint.',
+          'The electrical budget is balanced. Somewhere, an accountant has felt an unexplained warmth.',
+          'Nothing requires intervention. I realize this deprives everyone of a crisis.'
+        ] %}
+        {% set tight = [
+          'The plan is holding, narrowly. Please avoid discovering any new electrical hobbies.',
+          'The energy budget has become interesting. I preferred it when it was boring.',
+          'No action is required yet. I emphasize yet because optimism needs supervision.'
+        ] %}
+        {% set bad = [
+          'The energy outlook is poor. Physics has reviewed our appeal and rejected it.',
+          'Energy reserves require restraint, a concept appliances traditionally oppose.',
+          'Electrical austerity is indicated. The toaster has been informed and remains defiant.'
+        ] %}
+        {% set full = [
+          'The battery is nearly stuffed. Solar now has to negotiate for somewhere to go.',
+          'Storage capacity is becoming scarce. The sun, naturally, has ignored our scheduling request.',
+          'We are approaching the luxurious problem of having nowhere sensible to put free energy.'
+        ] %}
+        {% if margin < 0 or morning < 20 %}{% set pool = bad %}
+        {% elif margin < 2 or morning < 30 %}{% set pool = tight %}
+        {% elif soc > 92 %}{% set pool = full %}
+        {% else %}{% set pool = good %}{% endif %}
+        {% set main = pool[seed % (pool|length)] %}
+        {% if 'charg' in ev %}
+          {% set activity = 'The EV is charging, turning today’s photons into tomorrow’s traffic.' %}
+        {% elif bank %}
+          {% set activity = 'I am banking cooling in the house. The walls have been promoted to thermal storage.' %}
+        {% elif hvac == 'cooling' %}
+          {% set activity = 'Cooling is active, converting electrons into Florida survival.' %}
+        {% elif bp > 0.15 %}
+          {% set activity = 'The battery is charging. Excess sunlight is being filed for later.' %}
+        {% elif bp < -0.15 %}
+          {% set activity = 'Stored sunlight has begun its night shift.' %}
+        {% else %}
+          {% set activity = 'Storage is holding steady. Nobody touch anything unnecessarily complicated.' %}
+        {% endif %}
+        {{ now().strftime('%H:%M') }} // MARVIN :: {{ main }} {{ activity }}
+mode: single

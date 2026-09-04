@@ -1,0 +1,14 @@
+title: Marvin Home
+views:
+  - title: Home
+    path: home
+    icon: mdi:home
+    type: sections
+    max_columns: 1
+    sections:
+      - type: grid
+        cards:
+          - type: custom:marvin-night-city-card
+            grid_options:
+              columns: full
+              rows: auto
